@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Salesforce Formula Editor</title>
+    
+    <!-- Google Fonts: DM Sans (Closest open-source match to Google Sans) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        sky: {
+                            50: '#f0f9ff', 100: '#e0f2fe', 200: '#bae6fd', 300: '#7dd3fc',
+                            400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7', 700: '#0369a1',
+                            800: '#075985', 900: '#0c4a6e',
+                        }
+                    },
+                    fontFamily: {
+                        sans: ['"Google Sans"', '"DM Sans"', 'system-ui', 'sans-serif'],
+                        mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace']
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX -->
+    <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    
+    <style>
+        body { font-family: 'Google Sans', 'DM Sans', sans-serif; }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .dark ::-webkit-scrollbar-thumb { background: #475569; }
+        .dark ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        /* Smoother Inputs */
+        .sf-input {
+            border: 1px solid #bae6fd;
+            border-radius: 0.5rem;
+            padding: 0.375rem 0.75rem;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+            width: 100%;
+        }
+        .sf-input:focus { outline: none; border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.2); }
+        
+        .dark .sf-input {
+            background-color: #1e293b;
+            border-color: #475569;
+            color: #f1f5f9;
+        }
+        .dark .sf-input:focus { border-color: #38bdf8; box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.2); }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden bg-slate-50 text-slate-800 transition-colors duration-300">
+    <div id="root" class="h-full w-full"></div>
+
+    <script type="text/babel">
+        // --- FORMULA ENGINE ---
+        const SF_FUNCTIONS = {
+            ABS: Math.abs,
+            ROUND: function(num, digits) { const d = digits || 0; return Number(Math.round(num + "e" + d) + "e-" + d); },
+            FLOOR: Math.floor,
+            CEILING: Math.ceil, 
+            MAX: Math.max,
+            MIN: Math.min,
+            MOD: function(num, div) { return num % div; },
+            IF: function(cond, t, f) { return cond ? t : f; },
+            AND: function(...args) { return args.every(Boolean); },
+            OR: function(...args) { return args.some(Boolean); },
+            NOT: function(val) { return !val; },
+            ISBLANK: function(val) { return val === null || val === undefined || val === ''; },
+            ISPICKVAL: function(picklistValue, textValue) { return picklistValue === textValue; }
+        };
+
+        const FUNCTION_CATALOG = [
+            { category: 'Math', items: [
+                { name: 'ABS', syntax: 'ABS(number)', desc: 'Returns the absolute value of a number (removes negative sign).', example: 'ABS(-150)', expected: '150' },
+                { name: 'ROUND', syntax: 'ROUND(number, num_digits)', desc: 'Rounds a number to a specified number of digits.', example: 'ROUND(1.2345, 2)', expected: '1.23' },
+                { name: 'FLOOR', syntax: 'FLOOR(number)', desc: 'Rounds a number down to the nearest integer.', example: 'FLOOR(4.9)', expected: '4' },
+                { name: 'CEILING', syntax: 'CEILING(number)', desc: 'Rounds a number up to the nearest integer.', example: 'CEILING(4.1)', expected: '5' },
+                { name: 'MAX', syntax: 'MAX(number1, number2, ...)', desc: 'Returns the highest number from a list.', example: 'MAX(10, 50, 20)', expected: '50' },
+                { name: 'MIN', syntax: 'MIN(number1, number2, ...)', desc: 'Returns the lowest number from a list.', example: 'MIN(10, 50, 20)', expected: '10' },
+                { name: 'MOD', syntax: 'MOD(number, divisor)', desc: 'Returns a remainder after a number is divided by a specified divisor.', example: 'MOD(10, 3)', expected: '1' }
+            ]},
+            { category: 'Logical', items: [
+                { name: 'IF', syntax: 'IF(logical_test, value_if_true, value_if_false)', desc: 'Determines if expressions are true or false and returns corresponding values.', example: 'IF(10 > 5, "Yes", "No")', expected: '"Yes"' },
+                { name: 'AND', syntax: 'AND(logical1, logical2, ...)', desc: 'Returns TRUE if all arguments are true; returns FALSE if one or more arguments are false.', example: 'AND(10 > 5, 5 > 2)', expected: 'TRUE' },
+                { name: 'OR', syntax: 'OR(logical1, logical2, ...)', desc: 'Returns TRUE if any argument is true; returns FALSE if all arguments are false.', example: 'OR(10 > 5, 2 > 5)', expected: 'TRUE' },
+                { name: 'NOT', syntax: 'NOT(logical)', desc: 'Changes FALSE to TRUE, or TRUE to FALSE.', example: 'NOT(TRUE)', expected: 'FALSE' },
+                { name: 'ISBLANK', syntax: 'ISBLANK(expression)', desc: 'Determines if an expression has a value and returns TRUE if it does not.', example: 'ISBLANK("")', expected: 'TRUE' },
+                { name: 'ISPICKVAL', syntax: 'ISPICKVAL(picklist_field, text_literal)', desc: 'Determines if the value of a picklist field is equal to a text literal you specify.', example: 'ISPICKVAL(StageName, "Closed Won")', expected: 'TRUE' }
+            ]}
+        ];
+
+        // --- MAIN APP ---
+        const App = () => {
+            const [isDarkMode, setIsDarkMode] = React.useState(false);
+            const [hoveredFunc, setHoveredFunc] = React.useState(null);
+            
+            // State for the active tab (Formula or Validation Rule)
+            const [activeTab, setActiveTab] = React.useState('formula');
+
+            const [objects, setObjects] = React.useState([
+                {
+                    id: 'obj_1',
+                    name: 'Opportunity',
+                    isOpen: true,
+                    isEditing: false,
+                    fields: [
+                        { id: 'fld_1', name: 'Amount', type: 'Currency', value: 150000, isEditing: false },
+                        { id: 'fld_2', name: 'IsClosed', type: 'Checkbox', value: true, isEditing: false },
+                        { id: 'fld_3', name: 'DiscountPercent', type: 'Percent', value: 15.5, isEditing: false },
+                        { id: 'fld_4', name: 'StageName', type: 'Picklist', value: 'Closed Won', options: 'Prospecting, Qualification, Closed Won, Closed Lost', isEditing: false }
+                    ]
+                }
+            ]);
+            
+            // State for standard formulas
+            const [formula, setFormula] = React.useState('IF(Opportunity.IsClosed, Opportunity.Amount - (Opportunity.Amount * Opportunity.DiscountPercent / 100), 0)');
+            const [returnType, setReturnType] = React.useState('Currency');
+            const [evalResult, setEvalResult] = React.useState(null);
+            
+            // State for validation rules
+            const [validationFormula, setValidationFormula] = React.useState('AND(Opportunity.IsClosed, Opportunity.Amount < 0)');
+            const [validationErrorMessage, setValidationErrorMessage] = React.useState('Opportunity amount cannot be negative when closed.');
+            const [validationEvalResult, setValidationEvalResult] = React.useState(null);
+
+            const [activeCategory, setActiveCategory] = React.useState('Math');
+            
+            // Refs for the active textareas
+            const formulaTextareaRef = React.useRef(null);
+            const validationTextareaRef = React.useRef(null);
+
+            React.useEffect(() => {
+                if (isDarkMode) {
+                    document.documentElement.classList.add('dark');
+                    document.body.classList.add('bg-slate-900', 'text-slate-100');
+                    document.body.classList.remove('bg-slate-50', 'text-slate-800');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                    document.body.classList.remove('bg-slate-900', 'text-slate-100');
+                    document.body.classList.add('bg-slate-50', 'text-slate-800');
+                }
+            }, [isDarkMode]);
+
+            // --- OBJECT & FIELD LOGIC ---
+            const addObject = () => {
+                setObjects([{
+                    id: `obj_${Date.now()}`, name: 'NewObject__c', isOpen: true, isEditing: true, fields: []
+                }, ...objects]);
+            };
+
+            const toggleObject = (objId) => {
+                setObjects(objects.map(o => o.id === objId ? { ...o, isOpen: !o.isOpen } : o));
+            };
+
+            const toggleObjectEdit = (objId, e) => {
+                if (e) e.stopPropagation();
+                setObjects(objects.map(o => o.id === objId ? { ...o, isEditing: !o.isEditing } : o));
+            };
+
+            const addField = (objId) => {
+                setObjects(objects.map(o => o.id === objId ? {
+                    ...o, isOpen: true, fields: [...o.fields, { id: `fld_${Date.now()}`, name: 'NewField__c', type: 'Number', value: 0, isEditing: true }]
+                } : o));
+            };
+
+            const toggleFieldEdit = (objId, fieldId) => {
+                setObjects(objects.map(o => {
+                    if (o.id === objId) {
+                        return { ...o, fields: o.fields.map(f => {
+                            if (f.id === fieldId) {
+                                if (f.isEditing && f.type === 'Formula') {
+                                    return { ...f, isEditing: false, sourceFormula: formula, formulaReturnType: returnType };
+                                }
+                                return { ...f, isEditing: !f.isEditing };
+                            }
+                            return f;
+                        }) };
+                    }
+                    return o;
+                }));
+            };
+
+            const updateField = (objId, fieldId, key, val) => {
+                setObjects(objects.map(o => {
+                    if (o.id === objId) {
+                        return {
+                            ...o,
+                            fields: o.fields.map(f => {
+                                if (f.id === fieldId) {
+                                    let updatedValue = val;
+                                    if (key === 'name') updatedValue = val.replace(/[^a-zA-Z0-9_]/g, '');
+                                    if (key === 'options' && f.type === 'Picklist') updatedValue = val;
+                                    if (key === 'value') {
+                                        if (f.type === 'Number' || f.type === 'Currency' || f.type === 'Percent') updatedValue = parseFloat(val) || 0;
+                                        else if (f.type === 'Checkbox') updatedValue = val === 'true' || val === true;
+                                        else updatedValue = val;
+                                    }
+                                    return { ...f, [key]: updatedValue };
+                                }
+                                return f;
+                            })
+                        };
+                    }
+                    return o;
+                }));
+            };
+
+            const deleteField = (objId, fieldId) => {
+                setObjects(objects.map(o => o.id === objId ? { ...o, fields: o.fields.filter(f => f.id !== fieldId) } : o));
+            };
+
+            const getFormulaFieldValue = (rawFormula, type) => {
+                if (!rawFormula) return '#N/A';
+                try {
+                    let jsFormula = rawFormula.replace(/(?<![<>=!])=(?!=)/g, '===').replace(/<>/g, '!==').replace(/&/g, '+');
+                    Object.keys(SF_FUNCTIONS).forEach(funcName => {
+                        jsFormula = jsFormula.replace(new RegExp(`\\b${funcName}\\b`, 'gi'), funcName);
+                    });
+
+                    const paramNames = objects.map(o => o.name);
+                    const paramValues = objects.map(o => {
+                        const objData = {};
+                        o.fields.forEach(f => objData[f.name] = f.value);
+                        return objData;
+                    });
+                    
+                    const fn = new Function(...paramNames, ...Object.keys(SF_FUNCTIONS), `try { return (${jsFormula}); } catch(e) { return null; }`);
+                    let result = fn(...paramValues, ...Object.values(SF_FUNCTIONS));
+
+                    if (result === null || result === undefined || (typeof result === 'number' && isNaN(result))) return '#ERROR';
+                    if (type === 'Currency' && typeof result === 'number') return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(result);
+                    if (type === 'Percent' && typeof result === 'number') return `${result}%`;
+                    if (type === 'Checkbox' || typeof result === 'boolean') return result ? 'TRUE' : 'FALSE';
+                    return result;
+                } catch (e) {
+                    return '#ERROR';
+                }
+            };
+
+            // --- EDITOR LOGIC ---
+            const insertAtCursor = (text) => {
+                const textarea = activeTab === 'formula' ? formulaTextareaRef.current : validationTextareaRef.current;
+                const currentFormula = activeTab === 'formula' ? formula : validationFormula;
+                const setFormulaFunction = activeTab === 'formula' ? setFormula : setValidationFormula;
+
+                if (!textarea) return;
+
+                const start = textarea.selectionStart;
+                const end = textarea.selectionEnd;
+                setFormulaFunction(currentFormula.substring(0, start) + text + currentFormula.substring(end));
+                
+                setTimeout(() => {
+                    textarea.focus();
+                    let newPos = start + text.length;
+                    if (text.endsWith(')')) {
+                        const firstParen = text.indexOf('(');
+                        if (firstParen !== -1) {
+                            textarea.setSelectionRange(start + firstParen + 1, text.indexOf(',') !== -1 ? start + text.indexOf(',') : start + text.indexOf(')'));
+                            return;
+                        }
+                    }
+                    textarea.setSelectionRange(newPos, newPos);
+                }, 0);
+            };
+
+            const evaluateCurrentFormula = (isSyntaxCheckOnly = false) => {
+                if (activeTab === 'formula') {
+                    evaluateFormula(isSyntaxCheckOnly);
+                } else {
+                    evaluateValidationRule(isSyntaxCheckOnly);
+                }
+            }
+
+            const evaluateFormula = (isSyntaxCheckOnly = false) => {
+                setEvalResult(null);
+                try {
+                    if (!formula.trim()) throw new Error("Formula cannot be empty.");
+
+                    let jsFormula = formula.replace(/(?<![<>=!])=(?!=)/g, '===').replace(/<>/g, '!==').replace(/&/g, '+');
+                    Object.keys(SF_FUNCTIONS).forEach(funcName => {
+                        jsFormula = jsFormula.replace(new RegExp(`\\b${funcName}\\b`, 'gi'), funcName);
+                    });
+
+                    const paramNames = objects.map(o => o.name);
+                    const paramValues = objects.map(o => {
+                        const objData = {};
+                        o.fields.forEach(f => objData[f.name] = f.value);
+                        return objData;
+                    });
+                    const funcNames = Object.keys(SF_FUNCTIONS);
+                    const funcValues = Object.values(SF_FUNCTIONS);
+
+                    const fn = new Function(...paramNames, ...funcNames, `try { return (${jsFormula}); } catch(e) { throw new Error(e.message); }`);
+                    let result = fn(...paramValues, ...funcValues);
+
+                    if ((returnType === 'Number' || returnType === 'Currency' || returnType === 'Percent') && (isNaN(result) || typeof result !== 'number')) {
+                        throw new Error(`Type Mismatch: Expected a ${returnType}, evaluated to ${typeof result}.`);
+                    } else if (returnType === 'Checkbox' && typeof result !== 'boolean') {
+                        throw new Error(`Type Mismatch: Expected Checkbox (Boolean), evaluated to ${typeof result}.`);
+                    } else if (returnType === 'Text') {
+                        result = String(result);
+                    }
+
+                    if (isSyntaxCheckOnly) {
+                        setEvalResult({ status: 'success', message: 'Syntax is valid!', value: null });
+                    } else {
+                        let formatted = result;
+                        if(returnType === 'Currency') formatted = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(result);
+                        if(returnType === 'Percent') formatted = `${result}%`;
+                        setEvalResult({ status: 'success', message: 'Evaluation Successful', value: formatted, rawType: typeof result });
+                    }
+                } catch (error) {
+                    setEvalResult({ status: 'error', message: error.message.includes("is not defined") ? `Syntax Error: Unknown field or function.` : error.message });
+                }
+            };
+            
+            const evaluateValidationRule = (isSyntaxCheckOnly = false) => {
+                setValidationEvalResult(null);
+                try {
+                    if (!validationFormula.trim()) throw new Error("Validation formula cannot be empty.");
+
+                    let jsFormula = validationFormula.replace(/(?<![<>=!])=(?!=)/g, '===').replace(/<>/g, '!==').replace(/&/g, '+');
+                    Object.keys(SF_FUNCTIONS).forEach(funcName => {
+                        jsFormula = jsFormula.replace(new RegExp(`\\b${funcName}\\b`, 'gi'), funcName);
+                    });
+
+                    const paramNames = objects.map(o => o.name);
+                    const paramValues = objects.map(o => {
+                        const objData = {};
+                        o.fields.forEach(f => objData[f.name] = f.value);
+                        return objData;
+                    });
+                    const funcNames = Object.keys(SF_FUNCTIONS);
+                    const funcValues = Object.values(SF_FUNCTIONS);
+
+                    const fn = new Function(...paramNames, ...funcNames, `try { return (${jsFormula}); } catch(e) { throw new Error(e.message); }`);
+                    let result = fn(...paramValues, ...funcValues);
+
+                    if (typeof result !== 'boolean') {
+                        throw new Error(`Type Mismatch: Validation formulas must return a Boolean (True/False). Evaluated to ${typeof result}.`);
+                    }
+
+                    if (isSyntaxCheckOnly) {
+                        setValidationEvalResult({ status: 'success', message: 'Syntax is valid!', value: null });
+                    } else {
+                        // True means validation rule FIRES (error)
+                        if (result) {
+                             setValidationEvalResult({ status: 'error', message: 'Validation Rule Triggered', value: validationErrorMessage, isValidationHit: true });
+                        } else {
+                             setValidationEvalResult({ status: 'success', message: 'Record is valid', value: 'FALSE (Passed)', isValidationHit: false });
+                        }
+                    }
+                } catch (error) {
+                    setValidationEvalResult({ status: 'error', message: error.message.includes("is not defined") ? `Syntax Error: Unknown field or function.` : error.message, isValidationHit: false });
+                }
+            };
+
+            return (
+                <div className="flex flex-col h-full w-full bg-slate-50 dark:bg-slate-900">
+                    <header className="bg-sky-700 dark:bg-sky-900 text-white shadow-md px-6 py-3 shrink-0 flex items-center justify-between border-b border-sky-800 dark:border-slate-950">
+                        <div className="flex items-center gap-3">
+                            <i className="ph-fill ph-flask text-2xl text-sky-200"></i>
+                            <h1 className="text-xl font-bold tracking-wide">Advanced Formula Builder Sandbox</h1>
+                        </div>
+                        <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-full hover:bg-sky-600 dark:hover:bg-slate-700 transition-colors flex items-center justify-center">
+                            <i className={`ph-fill ${isDarkMode ? 'ph-sun text-yellow-300' : 'ph-moon'} text-xl`}></i>
+                        </button>
+                    </header>
+
+                    <div className="flex-1 flex overflow-hidden">
+                        {/* LEFT PANEL */}
+                        <aside className="w-[360px] flex flex-col bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 z-10 shadow-lg shrink-0">
+                            <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 flex justify-between items-center shrink-0">
+                                <h2 className="font-bold text-slate-700 dark:text-slate-200 text-sm uppercase tracking-wider flex items-center gap-2">
+                                    <i className="ph-fill ph-database text-sky-600 dark:text-sky-400 text-lg"></i>
+                                    Org Schema
+                                </h2>
+                                <button onClick={addObject} className="text-xs bg-sky-100 dark:bg-sky-900/50 hover:bg-sky-200 dark:hover:bg-sky-800 text-sky-700 dark:text-sky-300 px-3 py-1.5 rounded-full font-bold transition-colors flex items-center gap-1">
+                                    <i className="ph-bold ph-plus"></i> Object
+                                </button>
+                            </div>
+                            
+                            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                                {objects.map((obj) => (
+                                    <div key={obj.id} className="border border-slate-200 dark:border-slate-600 rounded-xl bg-white dark:bg-slate-800 shadow-sm overflow-hidden">
+                                        <div 
+                                            className={`bg-sky-50 dark:bg-slate-700/50 px-3 py-2.5 flex items-center justify-between border-b border-slate-200 dark:border-slate-600 group ${!obj.isEditing ? 'cursor-pointer hover:bg-sky-100 dark:hover:bg-slate-600/50' : ''}`}
+                                            onClick={() => !obj.isEditing && toggleObject(obj.id)}
+                                        >
+                                            <div className="flex items-center gap-2 flex-1 mr-2">
+                                                <button className="text-slate-500 dark:text-slate-400 hover:text-sky-600 dark:hover:text-sky-400">
+                                                    <i className={`ph-bold ph-caret-${obj.isOpen ? 'down' : 'right'} transition-transform`}></i>
+                                                </button>
+                                                {obj.isEditing ? (
+                                                    <input 
+                                                        type="text" 
+                                                        value={obj.name}
+                                                        onClick={(e) => e.stopPropagation()}
+                                                        onChange={(e) => setObjects(objects.map(o => o.id === obj.id ? { ...o, name: e.target.value.replace(/[^a-zA-Z0-9_]/g, '') } : o))}
+                                                        className="sf-input py-1 text-sm font-bold flex-1"
+                                                        placeholder="ObjectName__c"
+                                                        autoFocus
+                                                    />
+                                                ) : (
+                                                    <span className="font-bold text-sky-900 dark:text-sky-300 text-[15px] select-none">{obj.name}</span>
+                                                )}
+                                            </div>
+                                            
+                                            <div className="flex items-center gap-1">
+                                                {obj.isEditing ? (
+                                                    <button onClick={(e) => toggleObjectEdit(obj.id, e)} title="Save Object" className="px-2 py-1 bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-bold rounded-full flex items-center gap-1 shadow-sm transition-colors">
+                                                        <i className="ph-bold ph-check text-sm"></i> Save
+                                                    </button>
+                                                ) : (
+                                                    <>
+                                                        <button onClick={(e) => toggleObjectEdit(obj.id, e)} title="Edit Object" className="text-slate-400 hover:text-sky-600 hover:bg-sky-100 dark:hover:bg-slate-600 p-1.5 rounded-full transition-colors opacity-0 group-hover:opacity-100">
+                                                            <i className="ph-bold ph-pencil-simple text-lg"></i>
+                                                        </button>
+                                                        <button onClick={(e) => { e.stopPropagation(); addField(obj.id); }} title="Add Field" className="text-sky-600 dark:text-sky-400 hover:bg-sky-100 dark:hover:bg-slate-600 p-1.5 rounded-full transition-colors opacity-0 group-hover:opacity-100">
+                                                            <i className="ph-bold ph-plus text-lg"></i>
+                                                        </button>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        {obj.isOpen && (
+                                            <div className="p-2 space-y-2 bg-slate-50/50 dark:bg-slate-800">
+                                                {obj.fields.map((field) => (
+                                                    <div key={field.id} className="bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg p-3 relative group transition-all">
+                                                        {field.isEditing ? (
+                                                            <div className="space-y-3">
+                                                                <div className="flex gap-2">
+                                                                    <input type="text" value={field.name} onChange={(e) => updateField(obj.id, field.id, 'name', e.target.value)} className="sf-input font-mono text-xs font-bold flex-1" placeholder="FieldName__c" />
+                                                                    <select value={field.type} onChange={(e) => updateField(obj.id, field.id, 'type', e.target.value)} className="sf-input bg-slate-50 dark:bg-slate-800 text-xs w-32 shrink-0 font-medium">
+                                                                        <option value="Text">Text</option><option value="Number">Number</option>
+                                                                        <option value="Currency">Currency</option><option value="Percent">Percent</option>
+                                                                        <option value="Checkbox">Checkbox</option>
+                                                                        <option value="Picklist">Picklist</option>
+                                                                        <option value="Formula">Formula (fx)</option>
+                                                                    </select>
+                                                                </div>
+
+                                                                {field.type === 'Picklist' && (
+                                                                     <div className="flex gap-2 items-center mb-1">
+                                                                         <span className="text-[10px] uppercase font-bold text-slate-400 w-16">Options:</span>
+                                                                         <input type="text" value={field.options || ''} onChange={(e) => updateField(obj.id, field.id, 'options', e.target.value)} className="sf-input text-xs py-1" placeholder="Comma separated values" />
+                                                                     </div>
+                                                                )}
+
+                                                                {field.type === 'Formula' ? (
+                                                                    <div className="bg-sky-50/80 dark:bg-sky-950/40 p-2.5 rounded-lg border border-sky-200 dark:border-sky-800 text-xs">
+                                                                        <div className="flex justify-between items-center mb-1">
+                                                                            <span className="font-bold text-sky-800 dark:text-sky-300 flex items-center gap-1">
+                                                                                <i className="ph-bold ph-function"></i> Derived Formula
+                                                                            </span>
+                                                                            <span className="text-[10px] bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full font-bold">
+                                                                                Returns: {returnType}
+                                                                            </span>
+                                                                        </div>
+                                                                        <p className="font-mono text-[11px] text-slate-700 dark:text-slate-300 break-all bg-white dark:bg-slate-800 p-1.5 rounded border border-slate-200 dark:border-slate-700">
+                                                                            {formula || '(No formula entered in editor yet)'}
+                                                                        </p>
+                                                                        <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 italic">
+                                                                            💡 This field will lock to the current formula and stay Read-Only.
+                                                                        </p>
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className="text-[10px] uppercase font-bold text-slate-400 dark:text-slate-400 w-12">Value:</span>
+                                                                        {field.type === 'Checkbox' ? (
+                                                                            <input type="checkbox" checked={field.value} onChange={(e) => updateField(obj.id, field.id, 'value', e.target.checked)} className="w-4 h-4 text-sky-600 rounded" />
+                                                                        ) : field.type === 'Picklist' ? (
+                                                                            <select value={field.value} onChange={(e) => updateField(obj.id, field.id, 'value', e.target.value)} className="sf-input text-xs py-1">
+                                                                                {(field.options || '').split(',').map((opt, i) => (
+                                                                                    <option key={i} value={opt.trim()}>{opt.trim()}</option>
+                                                                                ))}
+                                                                            </select>
+                                                                        ) : (
+                                                                            <input type={field.type === 'Text' ? 'text' : 'number'} value={field.value} onChange={(e) => updateField(obj.id, field.id, 'value', e.target.value)} className="sf-input text-xs py-1" />
+                                                                        )}
+                                                                    </div>
+                                                                )}
+
+                                                                <div className="flex justify-end gap-1 pt-2 border-t border-slate-100 dark:border-slate-600">
+                                                                    <button onClick={() => deleteField(obj.id, field.id)} className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-full"><i className="ph-bold ph-trash"></i></button>
+                                                                    <button onClick={() => toggleFieldEdit(obj.id, field.id)} className="px-3 py-1 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold rounded-full flex items-center gap-1 shadow-sm"><i className="ph-bold ph-check"></i> Save</button>
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            <div>
+                                                                <div className="flex justify-between items-center mb-2">
+                                                                    <div className="font-mono text-sky-800 dark:text-sky-300 font-bold text-[13px] break-all flex items-center gap-1.5">
+                                                                        {field.type === 'Formula' && <i className="ph-bold ph-function text-emerald-500 text-sm" title="Calculated Formula Field"></i>}
+                                                                        {field.name}
+                                                                    </div>
+                                                                    <div className="flex items-center gap-1">
+                                                                        <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${field.type === 'Formula' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700' : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'}`}>
+                                                                            {field.type === 'Formula' ? `fx (${field.formulaReturnType || 'Formula'})` : field.type}
+                                                                        </span>
+                                                                        <button onClick={() => toggleFieldEdit(obj.id, field.id)} className="text-slate-400 hover:text-sky-600 dark:hover:text-sky-400 p-1" title="Edit Field"><i className="ph-bold ph-pencil-simple"></i></button>
+                                                                    </div>
+                                                                </div>
+
+                                                                {field.type === 'Formula' && field.sourceFormula && (
+                                                                    <div className="text-[10px] font-mono text-slate-500 dark:text-slate-400 truncate mb-1.5 px-1" title={field.sourceFormula}>
+                                                                        <span className="text-emerald-600 dark:text-emerald-400 font-bold">fx = </span>{field.sourceFormula}
+                                                                    </div>
+                                                                )}
+
+                                                                <div className="flex justify-between items-center">
+                                                                    <div className={`text-xs px-2.5 py-1 rounded border font-mono flex items-center gap-1.5 ${field.type === 'Formula' ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800/60 text-amber-900 dark:text-amber-300 cursor-not-allowed' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-100 dark:border-slate-600 text-slate-700 dark:text-slate-300'}`} title={field.type === 'Formula' ? 'Formula fields are read-only' : 'Field value'}>
+                                                                        {field.type === 'Formula' && <i className="ph-fill ph-lock-key text-amber-600 dark:text-amber-400 text-xs"></i>}
+                                                                        {field.type === 'Formula' ? (
+                                                                            <span className="font-bold tracking-wide">
+                                                                                {getFormulaFieldValue(field.sourceFormula, field.formulaReturnType)}
+                                                                            </span>
+                                                                        ) : field.type === 'Checkbox' ? (
+                                                                            field.value ? 'TRUE' : 'FALSE'
+                                                                        ) : (
+                                                                            field.value
+                                                                        )}
+                                                                    </div>
+                                                                    <button onClick={() => insertAtCursor(`${obj.name}.${field.name}`)} className="text-[10px] font-bold bg-sky-50 dark:bg-sky-900/30 border border-sky-200 dark:border-sky-800 text-sky-700 dark:text-sky-400 px-3 py-1 rounded-full hover:bg-sky-500 hover:text-white dark:hover:bg-sky-500 dark:hover:text-white transition-colors">
+                                                                        Insert
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        </aside>
+
+                        {/* CENTER PANEL */}
+                        <main className="flex-1 flex flex-col min-w-0 bg-slate-50 dark:bg-slate-900 relative">
+                            {/* Tabs */}
+                            <div className="flex items-center gap-6 px-8 pt-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-800 shrink-0">
+                                <button 
+                                    className={`pb-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'formula' ? 'text-sky-600 dark:text-sky-400 border-sky-600 dark:border-sky-400' : 'text-slate-500 dark:text-slate-400 border-transparent hover:border-slate-300'}`}
+                                    onClick={() => setActiveTab('formula')}
+                                >
+                                    <i className="ph-bold ph-function mr-1"></i> Formula Field
+                                </button>
+                                <button 
+                                    className={`pb-3 text-sm font-bold border-b-2 transition-colors ${activeTab === 'validation' ? 'text-red-500 dark:text-red-400 border-red-500 dark:border-red-400' : 'text-slate-500 dark:text-slate-400 border-transparent hover:border-slate-300'}`}
+                                    onClick={() => setActiveTab('validation')}
+                                >
+                                    <i className="ph-bold ph-shield-warning mr-1"></i> Validation Rule
+                                </button>
+                            </div>
+
+                            <div className="flex-1 flex flex-col p-8 overflow-y-auto">
+                                
+                                {/* ---------------- FORMULA FIELD EDITOR ---------------- */}
+                                {activeTab === 'formula' && (
+                                    <div className="flex flex-col h-full animate-[fadeIn_0.2s_ease-in-out]">
+                                        <div className="flex justify-between items-end mb-3 relative">
+                                            <label htmlFor="formula-editor" className="block text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide">Field Formula =</label>
+                                            
+                                            <div className="absolute right-0 bottom-2 flex items-center gap-2 bg-emerald-50 dark:bg-emerald-900/30 px-4 py-1.5 rounded-full border border-emerald-400 dark:border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.3),inset_0_0_10px_rgba(16,185,129,0.1)] ring-1 ring-emerald-300 dark:ring-emerald-700 z-20 transition-colors">
+                                                <span className="text-xs text-emerald-800 dark:text-emerald-300 font-bold uppercase tracking-wider flex items-center">
+                                                    <i className="ph-fill ph-magic-wand mr-1.5 text-emerald-600 dark:text-emerald-400"></i>Return Type:
+                                                </span>
+                                                <select 
+                                                    className="bg-transparent text-emerald-950 dark:text-emerald-100 font-black text-sm focus:outline-none cursor-pointer appearance-none pr-5 bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%2310b981%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E')] bg-no-repeat bg-right bg-[length:10px]"
+                                                    value={returnType}
+                                                    onChange={(e) => setReturnType(e.target.value)}
+                                                >
+                                                    <option value="Text">Text</option>
+                                                    <option value="Number">Number</option>
+                                                    <option value="Currency">Currency</option>
+                                                    <option value="Percent">Percent</option>
+                                                    <option value="Checkbox">Checkbox</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="relative flex-1 min-h-[200px] max-h-[300px] mb-6">
+                                            <textarea 
+                                                id="formula-editor"
+                                                ref={formulaTextareaRef}
+                                                value={formula}
+                                                onChange={(e) => setFormula(e.target.value)}
+                                                className="w-full h-full p-6 border border-slate-300 dark:border-slate-700 rounded-[20px] shadow-inner focus:ring-4 focus:ring-sky-100 dark:focus:ring-sky-900 focus:border-sky-400 dark:focus:border-sky-500 font-mono text-[15px] leading-relaxed resize-none bg-white dark:bg-slate-800 dark:text-slate-100 transition-all"
+                                                placeholder="Type formula here..."
+                                                spellCheck="false"
+                                            ></textarea>
+                                        </div>
+
+                                        <div className="flex items-center gap-4 mb-8 shrink-0">
+                                            <button onClick={() => evaluateCurrentFormula(true)} className="px-6 py-3 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-full shadow-sm hover:border-sky-400 dark:hover:border-sky-500 transition-all text-sm font-bold flex items-center gap-2">
+                                                <i className="ph-bold ph-check-circle text-lg"></i> Check Syntax
+                                            </button>
+                                            <button onClick={() => evaluateCurrentFormula(false)} className="px-8 py-3 bg-sky-600 hover:bg-sky-500 dark:bg-sky-600 text-white rounded-full shadow-md hover:shadow-lg transition-all text-sm font-bold flex items-center gap-2 transform hover:-translate-y-0.5">
+                                                <i className="ph-fill ph-play text-lg"></i> Evaluate Field
+                                            </button>
+                                            <button onClick={() => {setFormula(''); setEvalResult(null);}} className="px-5 py-3 text-slate-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full text-sm font-bold transition-colors ml-auto">
+                                                Clear
+                                            </button>
+                                        </div>
+                                        
+                                        {evalResult && (
+                                            <div className={`p-6 rounded-[20px] border shadow-sm shrink-0 transition-all ${
+                                                evalResult.status === 'success' ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800' : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
+                                            }`}>
+                                                <div className="flex items-start gap-4">
+                                                    <i className={`mt-0.5 text-2xl ${evalResult.status === 'success' ? 'ph-fill ph-check-circle text-emerald-500 dark:text-emerald-400' : 'ph-fill ph-warning-circle text-red-500 dark:text-red-400'}`}></i>
+                                                    <div>
+                                                        <h3 className={`font-bold text-lg ${evalResult.status === 'success' ? 'text-emerald-900 dark:text-emerald-300' : 'text-red-900 dark:text-red-300'}`}>
+                                                            {evalResult.status === 'success' ? (evalResult.value !== null ? 'Evaluation Result' : 'Syntax Check') : 'Error'}
+                                                        </h3>
+                                                        
+                                                        {evalResult.message && evalResult.value === null && (
+                                                            <p className={`text-sm mt-1 ${evalResult.status === 'success' ? 'text-emerald-700 dark:text-emerald-400' : 'text-red-700 dark:text-red-400 font-mono'}`}>{evalResult.message}</p>
+                                                        )}
+
+                                                        {evalResult.value !== null && (
+                                                            <div className="mt-3 text-3xl font-black text-slate-800 dark:text-slate-100 font-mono bg-white dark:bg-slate-800 px-5 py-3 rounded-xl border border-emerald-100 dark:border-emerald-800 shadow-sm inline-block">
+                                                                {evalResult.rawType === 'boolean' ? (
+                                                                    <span className={evalResult.value ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}>
+                                                                        {evalResult.value ? 'TRUE' : 'FALSE'}
+                                                                    </span>
+                                                                ) : (
+                                                                    String(evalResult.value)
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                                {/* ---------------- VALIDATION RULE EDITOR ---------------- */}
+                                {activeTab === 'validation' && (
+                                    <div className="flex flex-col h-full animate-[fadeIn_0.2s_ease-in-out]">
+                                        <div className="flex justify-between items-end mb-3">
+                                            <label htmlFor="validation-editor" className="block text-sm font-bold text-red-600 dark:text-red-400 uppercase tracking-wide flex items-center gap-2">
+                                                <i className="ph-fill ph-shield-warning text-lg"></i> Error Condition Formula
+                                            </label>
+                                            <div className="text-xs font-bold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-full border border-slate-200 dark:border-slate-700">
+                                                Must evaluate to <span className="text-red-500 dark:text-red-400">TRUE</span> to show error
+                                            </div>
+                                        </div>
+                                        
+                                        <div className="relative flex-1 min-h-[200px] max-h-[300px] mb-4">
+                                            <textarea 
+                                                id="validation-editor"
+                                                ref={validationTextareaRef}
+                                                value={validationFormula}
+                                                onChange={(e) => setValidationFormula(e.target.value)}
+                                                className="w-full h-full p-6 border border-slate-300 dark:border-slate-700 rounded-[20px] shadow-inner focus:ring-4 focus:ring-red-100 dark:focus:ring-red-900 focus:border-red-400 dark:focus:border-red-500 font-mono text-[15px] leading-relaxed resize-none bg-white dark:bg-slate-800 dark:text-slate-100 transition-all"
+                                                placeholder="Example: Amount < 0"
+                                                spellCheck="false"
+                                            ></textarea>
+                                        </div>
+
+                                        <div className="mb-6 bg-red-50 dark:bg-slate-800/80 p-4 rounded-xl border border-red-200 dark:border-red-900/50">
+                                            <label className="block text-xs font-bold text-red-700 dark:text-red-400 uppercase tracking-wide mb-2">Error Message</label>
+                                            <input 
+                                                type="text" 
+                                                value={validationErrorMessage} 
+                                                onChange={(e) => setValidationErrorMessage(e.target.value)} 
+                                                className="sf-input border-red-300 focus:border-red-500 focus:ring-red-200 w-full"
+                                                placeholder="Enter the error message to display to the user..."
+                                            />
+                                        </div>
+
+                                        <div className="flex items-center gap-4 mb-8 shrink-0">
+                                            <button onClick={() => evaluateCurrentFormula(true)} className="px-6 py-3 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 rounded-full shadow-sm hover:border-red-400 dark:hover:border-red-500 transition-all text-sm font-bold flex items-center gap-2">
+                                                <i className="ph-bold ph-check-circle text-lg"></i> Check Syntax
+                                            </button>
+                                            <button onClick={() => evaluateCurrentFormula(false)} className="px-8 py-3 bg-red-600 hover:bg-red-500 dark:bg-red-700 dark:hover:bg-red-600 text-white rounded-full shadow-md hover:shadow-lg transition-all text-sm font-bold flex items-center gap-2 transform hover:-translate-y-0.5">
+                                                <i className="ph-fill ph-play text-lg"></i> Test Rule
+                                            </button>
+                                            <button onClick={() => {setValidationFormula(''); setValidationEvalResult(null);}} className="px-5 py-3 text-slate-500 dark:text-slate-400 hover:text-red-500 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full text-sm font-bold transition-colors ml-auto">
+                                                Clear
+                                            </button>
+                                        </div>
+                                        
+                                        {validationEvalResult && (
+                                            <div className={`p-6 rounded-[20px] border shadow-sm shrink-0 transition-all ${
+                                                validationEvalResult.status === 'success' 
+                                                    ? (validationEvalResult.isValidationHit === false && validationEvalResult.value !== null ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800' : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700') 
+                                                    : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800'
+                                            }`}>
+                                                <div className="flex items-start gap-4">
+                                                    {validationEvalResult.status === 'success' && validationEvalResult.value === null && <i className="mt-0.5 text-2xl ph-fill ph-check-circle text-emerald-500 dark:text-emerald-400"></i>}
+                                                    {validationEvalResult.isValidationHit === false && validationEvalResult.value !== null && <i className="mt-0.5 text-2xl ph-fill ph-check-circle text-emerald-500 dark:text-emerald-400"></i>}
+                                                    {validationEvalResult.isValidationHit === true && <i className="mt-0.5 text-2xl ph-fill ph-warning-octagon text-red-500 dark:text-red-400 animate-pulse"></i>}
+                                                    {validationEvalResult.status === 'error' && !validationEvalResult.isValidationHit && <i className="mt-0.5 text-2xl ph-fill ph-warning-circle text-red-500 dark:text-red-400"></i>}
+
+                                                    <div>
+                                                        <h3 className={`font-bold text-lg ${
+                                                            validationEvalResult.isValidationHit ? 'text-red-900 dark:text-red-300' 
+                                                            : (validationEvalResult.status === 'success' ? 'text-emerald-900 dark:text-emerald-300' : 'text-red-900 dark:text-red-300')
+                                                        }`}>
+                                                            {validationEvalResult.message}
+                                                        </h3>
+
+                                                        {validationEvalResult.value !== null && (
+                                                            <div className={`mt-3 ${validationEvalResult.isValidationHit ? 'text-red-700 dark:text-red-400 bg-red-100 dark:bg-red-900/40 border-red-200 dark:border-red-800' : 'text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border-emerald-100 dark:border-emerald-800'} px-5 py-3 rounded-xl border shadow-sm inline-block`}>
+                                                                {validationEvalResult.isValidationHit ? (
+                                                                    <div className="flex flex-col">
+                                                                        <span className="text-[10px] uppercase font-bold text-red-500 dark:text-red-400 mb-1">Result: TRUE (Error Blocked)</span>
+                                                                        <span className="font-medium">"{validationEvalResult.value}"</span>
+                                                                    </div>
+                                                                ) : (
+                                                                    <div className="font-mono font-bold text-emerald-600 dark:text-emerald-400">{validationEvalResult.value}</div>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+
+                            </div>
+                        </main>
+
+                        {/* RIGHT PANEL: Functions */}
+                        <aside className="w-80 bg-white dark:bg-slate-800 border-l border-slate-200 dark:border-slate-700 flex flex-col z-10 shadow-xl shrink-0">
+                            <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 shrink-0">
+                                <h2 className="font-bold text-slate-700 dark:text-slate-200 text-sm uppercase tracking-wider mb-3 flex items-center gap-2">
+                                    <i className="ph-fill ph-function text-sky-600 dark:text-sky-400 text-lg"></i> Functions
+                                </h2>
+                                <select 
+                                    className="sf-input bg-white dark:bg-slate-700 font-bold text-slate-700 dark:text-slate-200"
+                                    value={activeCategory}
+                                    onChange={(e) => setActiveCategory(e.target.value)}
+                                >
+                                    {FUNCTION_CATALOG.map(cat => (
+                                        <option key={cat.category} value={cat.category}>{cat.category}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            
+                            <div className="flex-1 overflow-y-auto p-3 space-y-2 relative">
+                                {FUNCTION_CATALOG.find(c => c.category === activeCategory)?.items.map(func => (
+                                    <div key={func.name} className="relative group">
+                                        <div className={`p-3 rounded-xl border transition-all flex flex-col gap-1 ${hoveredFunc === func.name ? 'bg-sky-50 dark:bg-slate-700 border-sky-300 dark:border-slate-500' : 'bg-white dark:bg-slate-800 border-transparent hover:border-sky-200 dark:hover:border-slate-600 hover:bg-sky-50/50 dark:hover:bg-slate-700/30'}`}>
+                                            <div className="flex justify-between items-center">
+                                                <div className="flex items-center gap-1.5">
+                                                    <span className="font-bold text-sky-900 dark:text-sky-300 text-[15px]">{func.name}</span>
+                                                    <i 
+                                                        className="ph-fill ph-info text-sky-400 dark:text-sky-500 hover:text-sky-600 dark:hover:text-sky-300 cursor-help text-lg transition-colors"
+                                                        onMouseEnter={() => setHoveredFunc(func.name)}
+                                                        onMouseLeave={() => setHoveredFunc(null)}
+                                                    ></i>
+                                                </div>
+                                                <button onClick={() => insertAtCursor(func.syntax)} className="text-[10px] bg-white dark:bg-slate-600 border border-slate-200 dark:border-slate-500 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-full shadow-sm hover:bg-sky-600 hover:text-white dark:hover:bg-sky-500 transition-colors font-bold uppercase tracking-wider">
+                                                    Insert
+                                                </button>
+                                            </div>
+                                            <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono leading-tight">{func.syntax}</div>
+                                            
+                                            {hoveredFunc === func.name && (
+                                                <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-600 animate-[fadeIn_0.2s_ease-in-out]">
+                                                    <p className="text-xs text-slate-700 dark:text-slate-300 mb-2 leading-relaxed">{func.desc}</p>
+                                                    <div className="bg-white dark:bg-slate-900 p-2.5 rounded-lg text-xs font-mono space-y-1.5 border border-slate-200 dark:border-slate-700 shadow-inner">
+                                                        <div><span className="text-slate-400 font-bold uppercase text-[9px] block mb-0.5">Example:</span><span className="text-sky-700 dark:text-sky-400">{func.example}</span></div>
+                                                        <div><span className="text-slate-400 font-bold uppercase text-[9px] block mb-0.5">Output:</span><span className="text-emerald-600 dark:text-emerald-400 font-bold">{func.expected}</span></div>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </aside>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
